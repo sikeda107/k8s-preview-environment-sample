@@ -1,5 +1,6 @@
 import { CloudTasksClient } from '@google-cloud/tasks'
-import * as grpc from '@grpc/grpc-js'
+// tasks 内部と同一の grpc インスタンスを使い ChannelCredentials の instanceof 不一致を防ぐ
+import { grpc } from 'google-gax'
 
 // エミュレーターホストが設定されている場合は非 TLS で接続する
 function createClient(): CloudTasksClient {

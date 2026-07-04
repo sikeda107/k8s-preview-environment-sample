@@ -33,7 +33,8 @@ COPY --from=build --chown=nextjs:nodejs /app/public ./public
 # migration Job が node db/migrate.mjs を実行するため db/ をコピーする
 COPY --from=build --chown=nextjs:nodejs /app/db ./db
 
-USER nextjs
+# runAsNonRoot の検証は数値 UID でしか行えないため数値で指定する
+USER 1001
 
 EXPOSE 3000
 CMD ["node", "server.js"]
