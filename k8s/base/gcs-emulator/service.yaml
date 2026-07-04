@@ -1,0 +1,10 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: gcs
+spec:
+  selector:
+    app.kubernetes.io/name: gcs
+  ports:
+    - port: 4443
+      targetPort: 4443

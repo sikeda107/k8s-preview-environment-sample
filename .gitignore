@@ -1,0 +1,27 @@
+# Claude Code
+.claude/
+
+# Node.js
+node_modules/
+
+# Next.js
+.next/
+*.tsbuildinfo
+
+# 環境変数ファイル
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# macOS
+.DS_Store
+
+# エディタ
+.idea/
+*.swp
+*.swo
+
+# Playwright CLI 検証用の生成物
+.playwright-cli/

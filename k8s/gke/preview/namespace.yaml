@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: pr-0
+  labels:
+    # 共通 Gateway の allowedRoutes selector に一致させるため付与する
+    preview: "true"
