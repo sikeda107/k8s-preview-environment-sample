@@ -14,5 +14,7 @@ CREATE TABLE IF NOT EXISTS order_events (
   event_type VARCHAR(64) NOT NULL,
   message_id VARCHAR(128) NULL,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-  PRIMARY KEY (id)
+  PRIMARY KEY (id),
+  -- Pub/Sub の重複配信を弾くため一意にする MySQL は NULL の重複を許すので NULL のままでよい
+  UNIQUE KEY uq_order_events_message_id (message_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;

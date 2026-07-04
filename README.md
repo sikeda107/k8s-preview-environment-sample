@@ -14,7 +14,7 @@ Next.js + MySQL + Google Cloud Tasks + Google Cloud Pub/Sub + Google Cloud Stora
 | カテゴリ | 使用技術 |
 |---|---|
 | アプリ | Next.js 16 (App Router)、TypeScript、React 19 |
-| ビルド | `next build --webpack`（Turbopack の standalone 出力では pnpm の symlink や外部化パッケージが欠落するため webpack を採用） |
+| ビルド | Turbopack（pnpm を `nodeLinker: hoisted` のフラット配置にして standalone 出力の tracing と両立） |
 | DB | MySQL 8.0 |
 | タスクキュー | Google Cloud Tasks (HTTP ターゲット) |
 | メッセージング | Google Cloud Pub/Sub (push サブスクリプション) |
@@ -674,6 +674,10 @@ gcloud iam workload-identity-pools providers describe github \
 **Pub/Sub push サブスクリプションの OIDC 認証**
 
 本番の Google Cloud Pub/Sub から push 配信を受ける場合は、サブスクリプションに OIDC トークンを付与するサービスアカウントを設定し、`/api/pubsub/order-created` ハンドラー側でトークンを検証することを推奨します。未検証のまま公開すると外部から任意のペイロードを注入される恐れがあります。
+
+**Pub/Sub push の重複配信と冪等化**
+
+Pub/Sub push は at-least-once 配信のため、同一メッセージが複数回配信されることがあります。`/api/pubsub/order-created` ハンドラーは `order_events.message_id` の UNIQUE 制約と `INSERT IGNORE` により message_id で冪等化しており、重複配信は既処理として ack されます。
 
 **Cloud Storage の Workload Identity**
 

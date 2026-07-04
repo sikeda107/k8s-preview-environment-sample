@@ -13,11 +13,15 @@ const nextConfig: NextConfig = {
   ],
   // 複数の lockfile が検出される場合に workspace root を明示する
   outputFileTracingRoot: path.join(__dirname),
-  // 動的 require される JSON を pnpm の実体パスに限定して含め symlink を壊さないようにする
+  // 動的 require される JSON や CJS ビルドの欠落を防ぐため外部化パッケージ全体を含める
   outputFileTracingIncludes: {
     '/api/**': [
-      './node_modules/.pnpm/**/@google-cloud/tasks/build/**/*.json',
-      './node_modules/.pnpm/**/@google-cloud/pubsub/build/**/*.json',
+      './node_modules/@google-cloud/tasks/build/**',
+      './node_modules/@google-cloud/pubsub/build/**',
+      './node_modules/@google-cloud/storage/build/**',
+      './node_modules/fast-xml-parser/**',
+      './node_modules/html-entities/**',
+      './node_modules/mysql2/**',
     ],
   },
 }

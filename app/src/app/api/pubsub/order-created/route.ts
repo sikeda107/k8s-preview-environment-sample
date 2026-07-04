@@ -47,10 +47,14 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   try {
     const msgId =
       messageId && typeof messageId === 'string' ? messageId : null
-    await pool.execute<ResultSetHeader>(
-      'INSERT INTO order_events (order_id, event_type, message_id) VALUES (?, ?, ?)',
+    // Pub/Sub は at-least-once 配信のため message_id で冪等化し重複は既処理として ack する
+    const [result] = await pool.execute<ResultSetHeader>(
+      'INSERT IGNORE INTO order_events (order_id, event_type, message_id) VALUES (?, ?, ?)',
       [orderId, 'order_created', msgId],
     )
+    if (result.affectedRows === 0) {
+      console.log(`duplicate Pub/Sub message ignored: ${msgId}`)
+    }
 
     return new NextResponse(null, { status: 204 })
   } catch (err) {

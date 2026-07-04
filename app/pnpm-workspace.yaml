@@ -1,3 +1,5 @@
 allowBuilds:
   protobufjs: true
   sharp: true
+# symlink をなくし npm 互換のフラット配置にして Turbopack の tracing と両立させる
+nodeLinker: hoisted
