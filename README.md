@@ -318,9 +318,15 @@ AppProject と ApplicationSet を適用します。
 kubectl apply -k argocd/
 ```
 
-### GitHub Token Secret の作成
+### リポジトリ可視性 (public / private) による認証の違い
 
-ApplicationSet が private リポジトリの PR 情報を取得するために Personal Access Token が必要です。
+ApplicationSet の `pullRequest` generator と Argo CD のリポジトリ取得に必要な認証は、リポジトリの可視性によって変わります。
+
+**public リポジトリの場合は認証不要です。** 無認証で PR を列挙でき、リポジトリ取得にも認証情報は要りません。`github-token` Secret も ApplicationSet の `tokenRef` も、リポジトリ登録も省略できます。ただし GitHub API の無認証レート制限 (60 req/h) に収まるよう、generator の `requeueAfterSeconds` を大きめ (例: 120) に設定してください。
+
+**private リポジトリの場合は Personal Access Token が必要です。** 必要な権限は classic なら `repo` スコープ、fine-grained なら Contents=Read / Pull requests=Read / Metadata=Read です。次の2つを用意します。
+
+generator が PR 情報を取得するための Secret:
 
 ```bash
 kubectl create secret generic github-token \
@@ -328,11 +334,7 @@ kubectl create secret generic github-token \
   --from-literal=token=<GITHUB_PAT>
 ```
 
-PAT に必要な権限は `repo` スコープです。
-
-### Argo CD へのリポジトリ認証情報の登録
-
-Argo CD 本体にもリポジトリへのアクセス権を登録します。Argo CD CLI を使う場合は以下の通りです。
+Argo CD 本体がリポジトリを取得するための認証情報:
 
 ```bash
 argocd repo add https://github.com/sikeda107/k8s-preview-environment-sample.git \
@@ -537,6 +539,122 @@ sequenceDiagram
 ### Application の finalizer によるカスケード削除
 
 `applicationset.yaml` の `template.metadata.finalizers` に `resources-finalizer.argocd.argoproj.io` が設定されています。PR が Close されると ApplicationSet が Application を削除し、この finalizer が Namespace `pr-N` 内のすべてのリソースを連鎖的に削除します。手動でクリーンアップする必要はありません。
+
+### kind でライフサイクルを実地検証する
+
+GKE を用意しなくても、Argo CD の `pullRequest` generator による「PR ごとに環境が立ち上がる」挙動は kind 上で確認できます。`k8s/gke/preview` は GKE 固有の Gateway やイメージを前提とするため、ここでは kind 互換の `k8s/kind` overlay を namespace だけ PR 番号へ上書きして流用します。
+
+まず Argo CD core をインストールします。ApplicationSet の CRD はサイズが大きく client-side の `kubectl apply` では `annotations too long` で欠落するため、`--server-side` を使う点に注意してください。
+
+```bash
+kubectl create namespace argocd
+kubectl apply -n argocd --server-side -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/core-install.yaml
+kubectl -n argocd rollout status deploy/argocd-applicationset-controller
+```
+
+core-install には `default` AppProject が含まれないため、Application が参照できるよう作成しておきます。
+
+```bash
+kubectl apply -f - <<'EOF'
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: default
+  namespace: argocd
+spec:
+  sourceRepos: ['*']
+  destinations:
+    - namespace: '*'
+      server: '*'
+  clusterResourceWhitelist:
+    - group: '*'
+      kind: '*'
+EOF
+```
+
+検証用の ApplicationSet を適用します。public リポジトリのため token は不要で `tokenRef` を省略しています。private の場合の認証は「5. GKE での構成」の「リポジトリ可視性による認証の違い」を参照してください。
+
+```bash
+kubectl apply -f - <<'EOF'
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: preview-environments-kind
+  namespace: argocd
+spec:
+  goTemplate: true
+  goTemplateOptions:
+    - missingkey=error
+  generators:
+    - pullRequest:
+        github:
+          owner: sikeda107
+          repo: k8s-preview-environment-sample
+        requeueAfterSeconds: 120
+  template:
+    metadata:
+      name: preview-pr-{{.number}}
+      labels:
+        preview: "true"
+      finalizers:
+        - resources-finalizer.argocd.argoproj.io
+    spec:
+      project: default
+      source:
+        repoURL: https://github.com/sikeda107/k8s-preview-environment-sample.git
+        targetRevision: "{{.head_sha}}"
+        path: k8s/kind
+        kustomize:
+          namespace: pr-{{.number}}
+      destination:
+        server: https://kubernetes.default.svc
+        namespace: pr-{{.number}}
+      syncPolicy:
+        automated:
+          prune: true
+          selfHeal: true
+        syncOptions:
+          - CreateNamespace=true
+  syncPolicy:
+    preserveResourcesOnDeletion: false
+EOF
+```
+
+適当な PR を1つ開くと、generator がそれを検出し `preview-pr-<PR番号>` Application と `pr-<PR番号>` Namespace が自動作成されます。
+
+> **kind 固有の注意:** kind は LoadBalancer に外部 IP を払い出さないため Envoy Gateway が `Programmed=False` のままとなり、Argo CD の sync が Gateway の Healthy 待ちで停止して nextjs まで進みません。`cloud-provider-kind` や MetalLB で IP を払い出すか、検証目的なら次のように Envoy の Service の status に IP を手動付与して回避します。GKE では Gateway に IP が付くため発生しません。
+
+```bash
+# 検証目的の手動回避: Envoy の LoadBalancer Service に IP を付与して Gateway を Programmed にする
+SVC=$(kubectl -n envoy-gateway-system get svc -l gateway.envoyproxy.io/owning-gateway-namespace=pr-<PR番号> -o jsonpath='{.items[0].metadata.name}')
+kubectl -n envoy-gateway-system patch svc $SVC --subresource=status --type=merge \
+  -p '{"status":{"loadBalancer":{"ingress":[{"ip":"172.18.255.200"}]}}}'
+```
+
+```bash
+# Application と Namespace の生成を確認する
+kubectl -n argocd get applications
+kubectl get ns -l preview=true
+
+# アプリの起動を確認する (別ターミナルで port-forward、8080 は Docker が使う場合があるため 18080 を使う)
+kubectl -n pr-<PR番号> wait --for=condition=Available deploy/nextjs --timeout=180s
+kubectl -n envoy-gateway-system port-forward \
+  svc/$(kubectl -n envoy-gateway-system get svc -l gateway.envoyproxy.io/owning-gateway-name=local-gateway -o jsonpath='{.items[0].metadata.name}') 18080:80
+curl http://localhost:18080/api/healthz   # => {"ok":true}
+```
+
+PR を close すると Application が削除され、finalizer によって `pr-<PR番号>` Namespace ごとカスケード削除されます。
+
+```bash
+kubectl -n argocd get applications   # 消えていく様子を確認する
+kubectl get ns -l preview=true       # Namespace も消える
+```
+
+検証を終えたら ApplicationSet を削除します。
+
+```bash
+kubectl -n argocd delete applicationset preview-environments-kind
+```
 
 ---
 
