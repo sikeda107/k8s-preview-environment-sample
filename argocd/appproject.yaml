@@ -1,0 +1,15 @@
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: preview
+  namespace: argocd
+spec:
+  sourceRepos:
+    - https://github.com/sikeda107/k8s-preview-environment-sample.git
+  destinations:
+    - server: https://kubernetes.default.svc
+      namespace: pr-*
+  clusterResourceWhitelist:
+    # Namespace を Argo CD 管理に含めるために group "" kind Namespace のみ許可する
+    - group: ""
+      kind: Namespace

@@ -1,0 +1,56 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nextjs
+  annotations:
+    # Sync フェーズで Emulator や ConfigMap が適用された後に起動する
+    argocd.argoproj.io/sync-wave: "1"
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: nextjs
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: nextjs
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: nextjs
+          # kind で docker load したローカルイメージを使う
+          image: nextjs:local
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 3000
+          envFrom:
+            - configMapRef:
+                name: nextjs-config
+          env:
+            - name: DATABASE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: mysql-credentials
+                  key: password
+          readinessProbe:
+            httpGet:
+              path: /api/healthz
+              port: 3000
+          livenessProbe:
+            httpGet:
+              path: /api/healthz
+              port: 3000
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              memory: 512Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL

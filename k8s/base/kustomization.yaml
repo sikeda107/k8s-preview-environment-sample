@@ -1,0 +1,18 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - nextjs/configmap.yaml
+  - nextjs/deployment.yaml
+  - nextjs/service.yaml
+  - mysql/secret.yaml
+  - mysql/deployment.yaml
+  - mysql/service.yaml
+  - cloud-tasks-emulator/deployment.yaml
+  - cloud-tasks-emulator/service.yaml
+  - migration/job.yaml
+
+labels:
+  - pairs:
+      app.kubernetes.io/part-of: k8s-preview-environment-sample
+    includeSelectors: false

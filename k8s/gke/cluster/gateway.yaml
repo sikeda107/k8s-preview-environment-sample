@@ -1,0 +1,35 @@
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: shared-gateway
+  namespace: gateway-infra
+spec:
+  gatewayClassName: gke-l7-global-external-managed
+  listeners:
+    - name: https
+      port: 443
+      protocol: HTTPS
+      hostname: "*.preview.example.com"
+      tls:
+        mode: Terminate
+        certificateRefs:
+          # ワイルドカード証明書を事前に作成して同 Namespace に配置すること
+          - name: preview-example-com-tls
+      allowedRoutes:
+        namespaces:
+          from: Selector
+          selector:
+            matchLabels:
+              # Preview 用 Namespace のみ Route の接続を許可する
+              preview: "true"
+    - name: http
+      port: 80
+      protocol: HTTP
+      hostname: "*.preview.example.com"
+      allowedRoutes:
+        namespaces:
+          from: Selector
+          selector:
+            matchLabels:
+              # Preview 用 Namespace のみ Route の接続を許可する
+              preview: "true"

@@ -1,0 +1,61 @@
+# 利用に必要な Repository Variables は README の GitHub Actions 設定の項を参照
+name: preview-image
+on:
+  pull_request:
+    types:
+      - opened
+      - synchronize
+      - reopened
+
+permissions:
+  contents: read
+  # Workload Identity Federation の認証に id-token 書き込み権限が必要
+  id-token: write
+
+concurrency:
+  group: preview-image-${{ github.event.number }}
+  cancel-in-progress: true
+
+env:
+  IMAGE_NAME: asia-northeast1-docker.pkg.dev/${{ vars.GOOGLE_CLOUD_PROJECT_ID }}/${{ vars.ARTIFACT_REGISTRY_REPOSITORY }}/nextjs
+  # ApplicationSet 側の head_sha と一致させるために full SHA を使う
+  IMAGE_TAG: pr-${{ github.event.number }}-${{ github.event.pull_request.head.sha }}
+
+jobs:
+  build-and-push:
+    # Repository Variables 未設定のリポジトリでは安全にスキップする
+    if: ${{ vars.WORKLOAD_IDENTITY_PROVIDER != '' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          # ビルド対象とイメージタグの SHA を一致させるために head commit を明示的に指定する
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Authenticate to Google Cloud
+        id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GOOGLE_CLOUD_SERVICE_ACCOUNT }}
+          token_format: access_token
+
+      - name: Login to Artifact Registry
+        uses: docker/login-action@v3
+        with:
+          registry: asia-northeast1-docker.pkg.dev
+          username: oauth2accesstoken
+          password: ${{ steps.auth.outputs.access_token }}
+
+      - name: Setup Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: app
+          push: true
+          tags: ${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

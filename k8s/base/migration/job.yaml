@@ -1,0 +1,39 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: db-migrate
+  annotations:
+    argocd.argoproj.io/hook: PreSync
+    # Job 成功後に Argo CD がリソースを自動削除する
+    argocd.argoproj.io/hook-delete-policy: HookSucceeded
+    argocd.argoproj.io/sync-wave: "0"
+spec:
+  # Job が失敗すると Argo CD の Sync 全体が失敗扱いになる
+  backoffLimit: 2
+  activeDeadlineSeconds: 600
+  template:
+    spec:
+      restartPolicy: Never
+      initContainers:
+        - name: wait-for-mysql
+          image: busybox:1.36
+          command:
+            - sh
+            - -c
+            - until nc -z mysql 3306; do sleep 2; done
+      containers:
+        - name: migrate
+          image: nextjs:local
+          imagePullPolicy: IfNotPresent
+          command:
+            - node
+            - db/migrate.mjs
+          envFrom:
+            - configMapRef:
+                name: nextjs-config
+          env:
+            - name: DATABASE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: mysql-credentials
+                  key: password

@@ -1,0 +1,16 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: nextjs-config
+data:
+  DATABASE_HOST: mysql
+  DATABASE_PORT: "3306"
+  DATABASE_USER: app
+  DATABASE_NAME: app
+  GOOGLE_CLOUD_PROJECT: local-project
+  CLOUD_TASKS_LOCATION: asia-northeast1
+  CLOUD_TASKS_QUEUE: send-email
+  # Cloud Tasks Emulator のエンドポイント
+  CLOUD_TASKS_EMULATOR_HOST: cloud-tasks:8123
+  # 同一 Namespace 内の Service 名で Emulator から到達できる URL
+  TASK_HANDLER_BASE_URL: http://nextjs

@@ -1,0 +1,78 @@
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: preview-environments
+  namespace: argocd
+spec:
+  goTemplate: true
+  goTemplateOptions:
+    - missingkey=error
+  generators:
+    - pullRequest:
+        github:
+          owner: sikeda107
+          repo: k8s-preview-environment-sample
+          # private リポジトリのため Personal Access Token を Secret として用意する
+          # kubectl create secret generic github-token -n argocd --from-literal=token=<TOKEN>
+          tokenRef:
+            secretName: github-token
+            key: token
+        # Webhook 未設定でもポーリングで PR の変更に追従する
+        requeueAfterSeconds: 60
+  template:
+    metadata:
+      name: preview-pr-{{.number}}
+      labels:
+        preview: "true"
+      annotations:
+        preview.example.com/branch: "{{.branch}}"
+        preview.example.com/head-sha: "{{.head_sha}}"
+      # PR Close 時に管理リソースごとカスケード削除するための finalizer
+      finalizers:
+        - resources-finalizer.argocd.argoproj.io
+    spec:
+      project: preview
+      source:
+        repoURL: https://github.com/sikeda107/k8s-preview-environment-sample.git
+        targetRevision: "{{.head_sha}}"
+        path: k8s/gke/preview
+        kustomize:
+          namespace: pr-{{.number}}
+          # PROJECT_ID と REPOSITORY は利用者が実際の値に差し替えるプレースホルダー
+          images:
+            - "nextjs=asia-northeast1-docker.pkg.dev/PROJECT_ID/REPOSITORY/nextjs:pr-{{.number}}-{{.head_sha}}"
+          patches:
+            - target:
+                kind: HTTPRoute
+                name: nextjs
+              patch: |-
+                - op: replace
+                  path: /spec/hostnames/0
+                  value: pr-{{.number}}.preview.example.com
+            - target:
+                kind: ConfigMap
+                name: nextjs-config
+              # Cloud Tasks からは外部 URL 経由でしかハンドラーに到達できないため外部 URL を設定する
+              patch: |-
+                - op: replace
+                  path: /data/TASK_HANDLER_BASE_URL
+                  value: https://pr-{{.number}}.preview.example.com
+      destination:
+        server: https://kubernetes.default.svc
+        namespace: pr-{{.number}}
+      syncPolicy:
+        automated:
+          prune: true
+          selfHeal: true
+        syncOptions:
+          # PreSync フックが Namespace 作成より先に走るため初回 Sync に CreateNamespace=true が必須
+          - CreateNamespace=true
+        retry:
+          limit: 5
+          backoff:
+            duration: 10s
+            factor: 2
+            maxDuration: 3m
+  syncPolicy:
+    # PR Close で Application ごとリソースを削除するため false を指定する
+    preserveResourcesOnDeletion: false

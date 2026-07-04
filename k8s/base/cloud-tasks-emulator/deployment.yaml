@@ -1,0 +1,33 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cloud-tasks-emulator
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: cloud-tasks
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: cloud-tasks
+    spec:
+      containers:
+        - name: cloud-tasks-emulator
+          image: ghcr.io/ken109/cloud-tasks-emulator:latest
+          args:
+            - -host
+            - 0.0.0.0
+            - -port
+            - "8123"
+          ports:
+            - containerPort: 8123
+          readinessProbe:
+            tcpSocket:
+              port: 8123
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              memory: 128Mi
