@@ -8,7 +8,8 @@
     "build": "next build",
     "start": "next start",
     "typecheck": "tsc --noEmit",
-    "db:migrate": "node db/migrate.mjs"
+    "db:migrate": "node db/migrate.mjs",
+    "e2e": "playwright test"
   },
   "dependencies": {
     "@google-cloud/pubsub": "5.3.1",
@@ -21,6 +22,7 @@
     "react-dom": "19.2.7"
   },
   "devDependencies": {
+    "@playwright/test": "1.61.1",
     "@types/node": "26.1.0",
     "@types/react": "19.2.17",
     "@types/react-dom": "19.2.3",

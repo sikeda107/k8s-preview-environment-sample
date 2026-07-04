@@ -284,6 +284,25 @@ curl -X POST http://localhost:8080/api/orders \
 make migrate
 ```
 
+### E2E テスト
+
+起動済みの環境に対して Playwright で注文フローの E2E を実行できます。初回はブラウザを取得します。
+
+```bash
+cd app
+pnpm install
+pnpm exec playwright install chromium
+```
+
+別ターミナルで対象環境へ port-forward し、`E2E_BASE_URL` を指定してテストを実行します。
+
+```bash
+kubectl -n local port-forward svc/nextjs 18080:80   # 別ターミナルで実行
+E2E_BASE_URL=http://localhost:18080 pnpm e2e
+```
+
+`healthz` の確認と、注文作成からステータスが `email_sent` になり領収書が保存されるまでを検証します。GKE の Preview 環境に対しては `E2E_BASE_URL=https://pr-<PR番号>.preview.example.com` を指定します。
+
 ### 後片付け
 
 ```bash
