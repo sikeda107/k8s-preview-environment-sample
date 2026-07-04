@@ -1,4 +1,4 @@
-FROM node:22-alpine AS base
+FROM node:24-slim AS base
 RUN corepack enable
 
 # prod-deps ステージ: 本番依存のみを pnpm 標準レイアウトでインストールする
@@ -21,7 +21,7 @@ COPY . .
 RUN pnpm build
 
 # runner ステージ: standalone 出力と本番依存のみ含む軽量イメージ
-FROM node:22-alpine AS runner
+FROM node:24-slim AS runner
 WORKDIR /app
 
 ENV NODE_ENV=production
@@ -29,8 +29,8 @@ ENV HOSTNAME=0.0.0.0
 ENV PORT=3000
 
 # 非 root ユーザーで実行するためパーミッションを設定する
-RUN addgroup --system --gid 1001 nodejs && \
-    adduser --system --uid 1001 nextjs
+RUN groupadd --system --gid 999 nodejs && \
+    useradd --system --uid 999 --gid nodejs --no-create-home --shell /usr/sbin/nologin nextjs
 
 # tracing された node_modules はレイヤー肥大を避けるため最初からコピーせず選択コピーする
 COPY --from=build --chown=nextjs:nodejs /app/.next/standalone/server.js ./server.js
