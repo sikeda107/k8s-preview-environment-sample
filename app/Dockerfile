@@ -1,7 +1,13 @@
 FROM node:22-alpine AS base
 RUN corepack enable
 
-# deps ステージ: 依存パッケージをインストールする
+# prod-deps ステージ: 本番依存のみを pnpm 標準レイアウトでインストールする
+FROM base AS prod-deps
+WORKDIR /app
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+RUN pnpm install --prod --frozen-lockfile
+
+# deps ステージ: ビルドに必要な全依存パッケージをインストールする
 FROM base AS deps
 WORKDIR /app
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
@@ -14,7 +20,7 @@ COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 RUN pnpm build
 
-# runner ステージ: standalone 出力のみ含む軽量イメージ
+# runner ステージ: standalone 出力と本番依存のみ含む軽量イメージ
 FROM node:22-alpine AS runner
 WORKDIR /app
 
@@ -26,7 +32,14 @@ ENV PORT=3000
 RUN addgroup --system --gid 1001 nodejs && \
     adduser --system --uid 1001 nextjs
 
-COPY --from=build --chown=nextjs:nodejs /app/.next/standalone ./
+# tracing された node_modules はレイヤー肥大を避けるため最初からコピーせず選択コピーする
+COPY --from=build --chown=nextjs:nodejs /app/.next/standalone/server.js ./server.js
+COPY --from=build --chown=nextjs:nodejs /app/.next/standalone/package.json ./package.json
+COPY --from=build --chown=nextjs:nodejs /app/.next/standalone/.next ./.next
+
+# node_modules は Next の tracing に依存せず pnpm の prod install 成果物を同梱する
+COPY --from=prod-deps --chown=nextjs:nodejs /app/node_modules ./node_modules
+
 COPY --from=build --chown=nextjs:nodejs /app/.next/static ./.next/static
 COPY --from=build --chown=nextjs:nodejs /app/public ./public
 

@@ -14,7 +14,7 @@ Next.js + MySQL + Google Cloud Tasks + Google Cloud Pub/Sub + Google Cloud Stora
 | カテゴリ | 使用技術 |
 |---|---|
 | アプリ | Next.js 16 (App Router)、TypeScript、React 19 |
-| ビルド | Turbopack（pnpm を `nodeLinker: hoisted` のフラット配置にして standalone 出力の tracing と両立） |
+| ビルド | Turbopack（node_modules は pnpm の prod install 成果物をそのまま同梱し Next の tracing には依存しない） |
 | DB | MySQL 8.0 |
 | タスクキュー | Google Cloud Tasks (HTTP ターゲット) |
 | メッセージング | Google Cloud Pub/Sub (push サブスクリプション) |
