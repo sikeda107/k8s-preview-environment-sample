@@ -1,0 +1,30 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pubsub-emulator
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: pubsub
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: pubsub
+    spec:
+      containers:
+        - name: pubsub-emulator
+          image: thekevjames/gcloud-pubsub-emulator:latest
+          ports:
+            - containerPort: 8681
+          readinessProbe:
+            tcpSocket:
+              port: 8681
+            # JVM の起動時間を考慮して初期遅延を設ける
+            initialDelaySeconds: 10
+          resources:
+            requests:
+              cpu: 100m
+              memory: 192Mi
+            limits:
+              memory: 512Mi

@@ -14,3 +14,10 @@ data:
   CLOUD_TASKS_EMULATOR_HOST: cloud-tasks:8123
   # 同一 Namespace 内の Service 名で Emulator から到達できる URL
   TASK_HANDLER_BASE_URL: http://nextjs
+  # Google Cloud Pub/Sub エミュレーターのエンドポイント
+  PUBSUB_EMULATOR_HOST: pubsub:8085
+  PUBSUB_TOPIC: order-events
+  PUBSUB_PUSH_SUBSCRIPTION: order-events-push
+  # Google Cloud Storage エミュレーターのエンドポイント
+  STORAGE_EMULATOR_HOST: http://gcs:4443
+  CLOUD_STORAGE_BUCKET: order-receipts

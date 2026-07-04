@@ -1,21 +1,24 @@
 # k8s-preview-environment-sample
 
-Next.js + MySQL + Google Cloud Tasks を使った Kubernetes Preview Environment のサンプルリポジトリです。ローカルでは kind を使って手軽に動かせ、GKE では Pull Request ごとに独立した Preview 環境を自動デプロイするテンプレートとして利用できます。
+Next.js + MySQL + Google Cloud Tasks + Google Cloud Pub/Sub + Google Cloud Storage を使った Kubernetes Preview Environment のサンプルリポジトリです。ローカルでは kind を使って手軽に動かせ、GKE では Pull Request ごとに独立した Preview 環境を自動デプロイするテンプレートとして利用できます。
 
 ## 1. 概要
 
-このサンプルは「注文を受け付けて Google Cloud Tasks 経由でメール送信タスクをキューに積む」という最小限のアプリケーションを題材に、以下を実現します。
+このサンプルは「注文を受け付けて Google Cloud Tasks 経由でメール送信タスクをキューに積み、Pub/Sub でイベントを配信し、Storage に領収書を保存する」という最小限のアプリケーションを題材に、以下を実現します。
 
-- **ローカル (kind)**: Envoy Gateway + Cloud Tasks Emulator で本番と同じコードを動かす
+- **ローカル (kind)**: Envoy Gateway + Cloud Tasks Emulator + Pub/Sub Emulator + Cloud Storage Emulator で本番と同じコードを動かす
 - **GKE Preview**: Argo CD ApplicationSet の Pull Request generator が PR ごとに Namespace `pr-<番号>` へ自動デプロイし、PR Close 時にカスケード削除する
 
 ### 技術スタック
 
 | カテゴリ | 使用技術 |
 |---|---|
-| アプリ | Next.js 15 (App Router)、TypeScript、React 19 |
+| アプリ | Next.js 16 (App Router)、TypeScript、React 19 |
+| ビルド | `next build --webpack`（Turbopack の standalone 出力では pnpm の symlink や外部化パッケージが欠落するため webpack を採用） |
 | DB | MySQL 8.0 |
 | タスクキュー | Google Cloud Tasks (HTTP ターゲット) |
+| メッセージング | Google Cloud Pub/Sub (push サブスクリプション) |
+| オブジェクトストレージ | Google Cloud Storage |
 | コンテナランタイム | Docker (multi-stage build、Node.js 22-alpine) |
 | ローカル K8s | kind |
 | Gateway 実装 (kind) | Envoy Gateway v1.4.2 |
@@ -52,6 +55,10 @@ graph TD
             mysql_svc["Service: mysql\n:3306"]
             emulator["cloud-tasks-emulator\n(ghcr.io/ken109/cloud-tasks-emulator)"]
             emulator_svc["Service: cloud-tasks\n:8123"]
+            pubsub["pubsub-emulator\n(thekevjames/gcloud-pubsub-emulator)"]
+            pubsub_svc["Service: pubsub\n:8085 → :8681"]
+            gcs["gcs-emulator\n(fsouza/fake-gcs-server)"]
+            gcs_svc["Service: gcs\n:4443"]
             migrate["Job: db-migrate\n(PreSync wave 0)"]
             secret["Secret: mysql-credentials\n(PreSync wave -2)"]
         end
@@ -68,6 +75,11 @@ graph TD
     nextjs -- "enqueue task" --> emulator_svc
     emulator_svc --> emulator
     emulator -- "POST http://nextjs/api/tasks/send-email" --> nextjs_svc
+    nextjs -- "publish order-events" --> pubsub_svc
+    pubsub_svc --> pubsub
+    pubsub -- "POST http://nextjs/api/pubsub/order-created" --> nextjs_svc
+    nextjs -- "upload receipts/" --> gcs_svc
+    gcs_svc --> gcs
     migrate --> mysql_svc
     migrate -.-> secret
 ```
@@ -97,12 +109,16 @@ graph TD
         nextjs_svc["Service: nextjs"]
         mysql["mysql Deployment\n(PreSync)"]
         emulator["cloud-tasks-emulator"]
+        pubsub["pubsub-emulator"]
+        gcs["gcs-emulator"]
         migrate["Job: db-migrate\n(PreSync)"]
     end
 
     gke_lb["GKE L7 LB\n(外部 IP)"]
     dns["DNS\n*.preview.example.com → LB IP"]
     cloud_tasks["Google Cloud Tasks\n(マネージドサービス)"]
+    cloud_pubsub["Google Cloud Pub/Sub\n(マネージドサービス)"]
+    cloud_storage["Google Cloud Storage\n(マネージドサービス)"]
 
     pr --> actions
     actions --> registry
@@ -116,6 +132,9 @@ graph TD
     nextjs_svc --> nextjs
     nextjs -- "enqueue task" --> cloud_tasks
     cloud_tasks -- "POST https://pr-N.preview.example.com/api/tasks/send-email" --> gke_lb
+    nextjs -- "publish order-events" --> cloud_pubsub
+    cloud_pubsub -- "POST https://pr-N.preview.example.com/api/pubsub/order-created" --> gke_lb
+    nextjs -- "upload receipts/" --> cloud_storage
 ```
 
 ---
@@ -130,19 +149,25 @@ k8s-preview-environment-sample/
 ├── app/                            # Next.js アプリケーション
 │   ├── src/
 │   │   ├── app/
-│   │   │   ├── page.tsx            # 注文一覧ページ (Server Component)
+│   │   │   ├── page.tsx            # 注文一覧・イベント・領収書表示ページ (Server Component)
 │   │   │   ├── OrderForm.tsx       # 注文フォーム (Client Component)
+│   │   │   ├── actions.ts          # Server Action (useActionState + createOrder)
 │   │   │   ├── layout.tsx
 │   │   │   └── api/
 │   │   │       ├── healthz/        # ヘルスチェックエンドポイント
 │   │   │       ├── orders/         # 注文作成 API (POST)
+│   │   │       ├── pubsub/
+│   │   │       │   └── order-created/ # Pub/Sub push サブスクリプションハンドラー (POST)
 │   │   │       └── tasks/
 │   │   │           └── send-email/ # Cloud Tasks ハンドラー (POST)
 │   │   └── lib/
 │   │       ├── db.ts               # MySQL コネクションプール
-│   │       └── cloud-tasks.ts      # Cloud Tasks クライアント (Emulator 切り替え対応)
+│   │       ├── cloud-tasks.ts      # Cloud Tasks クライアント (Emulator 切り替え対応)
+│   │       ├── orders.ts           # 注文作成ドメインロジック
+│   │       ├── pubsub.ts           # Pub/Sub クライアントとイベント発行
+│   │       └── storage.ts          # Cloud Storage クライアントと領収書アップロード
 │   ├── db/
-│   │   ├── schema.sql              # orders テーブル定義
+│   │   ├── schema.sql              # orders / order_events テーブル定義
 │   │   └── migrate.mjs             # マイグレーションスクリプト
 │   ├── Dockerfile                  # multi-stage build (node:22-alpine)
 │   └── package.json
@@ -151,6 +176,8 @@ k8s-preview-environment-sample/
 │   │   ├── nextjs/                 # ConfigMap / Deployment / Service
 │   │   ├── mysql/                  # Secret / Deployment / Service (PreSync)
 │   │   ├── cloud-tasks-emulator/   # Deployment / Service
+│   │   ├── pubsub-emulator/        # Deployment / Service (thekevjames/gcloud-pubsub-emulator)
+│   │   ├── gcs-emulator/           # Deployment / Service (fsouza/fake-gcs-server)
 │   │   └── migration/              # Job: db-migrate (PreSync wave 0)
 │   ├── kind/                       # kind 用オーバーレイ
 │   │   ├── kustomization.yaml      # namespace: local
@@ -231,7 +258,7 @@ make port-forward
 Envoy の Service 名は動的に生成されるため、`kubectl get svc` で取得して転送します。準備できたら以下のコマンドで確認します。
 
 ```bash
-# トップページ (注文一覧)
+# トップページ (注文一覧・注文イベント・領収書ファイル)
 curl http://localhost:8080/
 
 # 注文作成 (Cloud Tasks Emulator 経由でメール送信タスクをキューに積む)
@@ -241,7 +268,13 @@ curl -X POST http://localhost:8080/api/orders \
 # => {"orderId":1}
 ```
 
-ブラウザで `http://localhost:8080/` を開き、注文一覧に status が `email_sent` になっていることを確認します。Cloud Tasks Emulator が自動的に `POST http://nextjs/api/tasks/send-email` を呼び出すため、数秒後にステータスが更新されます。
+ブラウザで `http://localhost:8080/` を開き、以下を確認します。
+
+- 注文一覧に status が `email_sent` になっていること（Cloud Tasks Emulator が自動的に `POST http://nextjs/api/tasks/send-email` を呼び出すため、数秒後にステータスが更新されます）
+- 注文イベント一覧に `order_created` イベントが表示されていること（Pub/Sub Emulator が push サブスクリプション経由で `POST http://nextjs/api/pubsub/order-created` を呼び出し `order_events` テーブルに記録されます）
+- 領収書ファイル一覧に `receipts/order-<id>.txt` が表示されていること（send-email ハンドラーが Cloud Storage Emulator の `order-receipts` バケットにアップロードします）
+
+フォームからも同様に注文を作成できます。フォームは React 19 の `useActionState` と Server Action (`actions.ts`) を使って送信します。
 
 ### migration の再実行
 
@@ -365,26 +398,26 @@ Gateway API は Gateway と HTTPRoute の分離により、経路の追加・変
 
 ---
 
-## 7. Cloud Tasks Emulator の役割と本番との差分
+## 7. エミュレーターの役割と本番との差分
 
 ### なぜ Emulator が必要か
 
-Google Cloud Tasks はマネージドサービスであり、ローカル環境や kind クラスタから直接接続することはできません。また、ローカル開発のたびに実際のキューを使うと意図しないタスクが実行されるリスクがあります。
+Google Cloud Tasks・Google Cloud Pub/Sub・Google Cloud Storage はいずれもマネージドサービスであり、ローカル環境や kind クラスタから直接接続することはできません。また、ローカル開発のたびに実際のサービスを使うと意図しない副作用が発生するリスクがあります。
 
-このリポジトリでは `ghcr.io/ken109/cloud-tasks-emulator:latest` を kind と GKE Preview 環境の両方にデプロイし、`CLOUD_TASKS_EMULATOR_HOST` 環境変数が設定されているときだけ Emulator に接続するようにアプリを実装しています。本番環境では同変数を設定しないため、コード変更なしに本番の Google Cloud Tasks に切り替わります。
+このリポジトリでは各サービスのエミュレーターを kind と GKE Preview 環境の両方にデプロイし、環境変数の有無で本番サービスとエミュレーターを切り替えるようにアプリを実装しています。
 
-### 本番 Google Cloud Tasks との差分
+### Cloud Tasks Emulator
+
+`ghcr.io/ken109/cloud-tasks-emulator:latest` を Deployment `cloud-tasks-emulator` / Service `cloud-tasks`（port 8123）でデプロイします。`CLOUD_TASKS_EMULATOR_HOST` 環境変数が設定されているときだけ Emulator に接続し、本番環境では同変数を設定しないため、コード変更なしに本番の Google Cloud Tasks に切り替わります。
 
 | 項目 | Emulator | 本番 Google Cloud Tasks |
 |---|---|---|
-| 認証 | 不要 (TLS なし gRPC) | Workload Identity または サービスアカウントキー |
+| 認証 | 不要 (TLS なし gRPC) | Workload Identity またはサービスアカウントキー |
 | ハンドラーへの OIDC 認証 | なし | `CLOUD_TASKS_SERVICE_ACCOUNT_EMAIL` で設定 |
 | キュー作成 | アプリ起動時に自動作成 | 事前に `gcloud tasks queues create` |
 | レート制御 | なし | maxDispatchesPerSecond / maxConcurrentDispatches |
 | タスク到達性 | 同一クラスタ内の Service 名で到達 | 外部 URL が必要 |
 | 永続性 | Pod 再起動で消える | マネージドで永続 |
-
-### アプリの切り替え方
 
 `app/src/lib/cloud-tasks.ts` が `CLOUD_TASKS_EMULATOR_HOST` の有無を確認します。
 
@@ -400,6 +433,32 @@ function createClient(): CloudTasksClient {
 }
 ```
 
+### Pub/Sub Emulator
+
+`thekevjames/gcloud-pubsub-emulator:latest` を Deployment `pubsub-emulator` / Service `pubsub`（port 8085 → コンテナ 8681）でデプロイします。`PUBSUB_EMULATOR_HOST` 環境変数を `@google-cloud/pubsub` がネイティブに解釈するため、アプリ側で特別な切り替えコードは不要です。エミュレーター利用時はアプリ起動時に topic `order-events` と push サブスクリプション `order-events-push` を自動作成します。
+
+| 項目 | Emulator | 本番 Google Cloud Pub/Sub |
+|---|---|---|
+| 認証 | 不要 | Workload Identity またはサービスアカウントキー |
+| push サブスクリプションの OIDC 認証 | なし | OIDC トークン検証を推奨 |
+| topic / サブスクリプション作成 | アプリ起動時に自動作成 | 事前にコンソールまたは gcloud で作成 |
+| 永続性 | Pod 再起動で消える | マネージドで永続 |
+
+`app/src/lib/pubsub.ts` が `PUBSUB_EMULATOR_HOST` の有無を確認してエミュレーター時の自動作成を行います。
+
+### Cloud Storage Emulator
+
+`fsouza/fake-gcs-server:latest` を Deployment `gcs-emulator` / Service `gcs`（port 4443）でデプロイします。`STORAGE_EMULATOR_HOST` 環境変数が設定されているときだけエミュレーターに接続します。エミュレーター利用時はアプリ起動時に bucket `order-receipts` を自動作成します。
+
+| 項目 | Emulator | 本番 Google Cloud Storage |
+|---|---|---|
+| 認証 | 不要 | Workload Identity またはサービスアカウントキー |
+| bucket 作成 | アプリ起動時に自動作成 | 事前にコンソールまたは gcloud で作成 |
+| TLS | なし (HTTP) | HTTPS |
+| 永続性 | Pod 再起動で消える | マネージドで永続 |
+
+`app/src/lib/storage.ts` が `STORAGE_EMULATOR_HOST` の有無を確認し、エミュレーター時は `apiEndpoint` オプションで接続先を切り替えます。
+
 ---
 
 ## 8. Service 名で通信できる理由
@@ -408,13 +467,15 @@ function createClient(): CloudTasksClient {
 
 Kubernetes クラスタ内では `kube-dns` が動作しており、`<service-name>.<namespace>.svc.cluster.local` という形式の FQDN が自動的に解決されます。同一 Namespace 内では `<service-name>` だけで通信できます。
 
-kind 環境では Namespace `local` 内に `nextjs` と `cloud-tasks` と `mysql` の Service があり、同一 Namespace 内のどの Pod からも短い名前でアクセスできます。
+kind 環境では Namespace `local` 内に `nextjs`・`cloud-tasks`・`mysql`・`pubsub`・`gcs` の Service があり、同一 Namespace 内のどの Pod からも短い名前でアクセスできます。
 
 ```
 # 同一 Namespace 内からアクセスする例
 http://nextjs/         → Service nextjs (port 80)
 mysql:3306             → Service mysql (port 3306)
 cloud-tasks:8123       → Service cloud-tasks (port 8123)
+pubsub:8085            → Service pubsub (port 8085)
+http://gcs:4443        → Service gcs (port 4443)
 ```
 
 ### Emulator と本番の到達先 URL の違い
@@ -458,7 +519,7 @@ sequenceDiagram
     ArgoCD->>K8s: PreSync: mysql-credentials Secret (wave -2)
     ArgoCD->>K8s: PreSync: MySQL Deployment/Service (wave -1)
     ArgoCD->>K8s: PreSync: db-migrate Job (wave 0)
-    ArgoCD->>K8s: Sync: nextjs / cloud-tasks-emulator 等
+    ArgoCD->>K8s: Sync: nextjs / cloud-tasks-emulator / pubsub-emulator / gcs-emulator 等
     K8s-->>Dev: https://pr-N.preview.example.com でアクセス可能
 
     Dev->>GH: 追加コミット
@@ -490,6 +551,8 @@ sequenceDiagram
 | PreSync | -1 | Service: mysql | なし (残留) |
 | PreSync | 0 | Job: db-migrate | HookSucceeded |
 | Sync | 0 | cloud-tasks-emulator Deployment/Service | — |
+| Sync | 0 | pubsub-emulator Deployment/Service | — |
+| Sync | 0 | gcs-emulator Deployment/Service | — |
 | Sync | 0 | ConfigMap: nextjs-config | — |
 | Sync | 1 | Deployment: nextjs | — |
 
@@ -602,11 +665,19 @@ gcloud iam workload-identity-pools providers describe github \
 
 **Emulator を本番で使わない**
 
-本番環境では `CLOUD_TASKS_EMULATOR_HOST` 環境変数を設定せず、実際の Google Cloud Tasks を使ってください。
+本番環境では `CLOUD_TASKS_EMULATOR_HOST`・`PUBSUB_EMULATOR_HOST`・`STORAGE_EMULATOR_HOST` 環境変数を設定せず、実際のマネージドサービスを使ってください。エミュレーターはデータ永続性がなく、Pod 再起動でデータが消えます。
 
-**OIDC 認証の設定**
+**Cloud Tasks OIDC 認証の設定**
 
 本番の Google Cloud Tasks がハンドラーを呼び出す際に OIDC 認証を使う場合は `CLOUD_TASKS_SERVICE_ACCOUNT_EMAIL` を設定します。Cloud Tasks がこのサービスアカウントで署名した OIDC トークンをリクエストに付与します。
+
+**Pub/Sub push サブスクリプションの OIDC 認証**
+
+本番の Google Cloud Pub/Sub から push 配信を受ける場合は、サブスクリプションに OIDC トークンを付与するサービスアカウントを設定し、`/api/pubsub/order-created` ハンドラー側でトークンを検証することを推奨します。未検証のまま公開すると外部から任意のペイロードを注入される恐れがあります。
+
+**Cloud Storage の Workload Identity**
+
+本番の Google Cloud Storage にアクセスする場合は、GKE Workload Identity を使って Pod に Google Cloud サービスアカウントの権限を付与してください。サービスアカウントキーをコンテナにマウントする方法は避けることを推奨します。
 
 **MySQL は外部 DB へ**
 
@@ -643,3 +714,8 @@ PR が増えるほどクラスタのリソースを消費します。不要な P
 | `CLOUD_TASKS_EMULATOR_HOST` | `cloud-tasks:8123` | `cloud-tasks:8123` | (未設定) | Emulator のホスト:ポート。未設定時は本番 Google Cloud Tasks を使用 |
 | `TASK_HANDLER_BASE_URL` | `http://nextjs` | `https://pr-N.preview.example.com` | `https://example.com` | Cloud Tasks がタスクハンドラーを呼び出す際のベース URL |
 | `CLOUD_TASKS_SERVICE_ACCOUNT_EMAIL` | (未設定) | (未設定) | `tasks-invoker@PROJECT.iam.gserviceaccount.com` | OIDC 認証用サービスアカウント。設定時のみ OIDC トークンを付与 |
+| `PUBSUB_EMULATOR_HOST` | `pubsub:8085` | `pubsub:8085` | (未設定) | Pub/Sub エミュレーターのホスト:ポート。`@google-cloud/pubsub` がネイティブに解釈する |
+| `PUBSUB_TOPIC` | `order-events` | `order-events` | 実際の topic 名 | 注文イベントを publish する Pub/Sub topic 名 |
+| `PUBSUB_PUSH_SUBSCRIPTION` | `order-events-push` | `order-events-push` | 実際のサブスクリプション名 | push サブスクリプション名。エミュレーター利用時に自動作成される |
+| `STORAGE_EMULATOR_HOST` | `http://gcs:4443` | `http://gcs:4443` | (未設定) | Cloud Storage エミュレーターの URL。未設定時は本番 Google Cloud Storage を使用 |
+| `CLOUD_STORAGE_BUCKET` | `order-receipts` | `order-receipts` | 実際のバケット名 | 領収書ファイルを保存する Cloud Storage バケット名 |

@@ -10,6 +10,10 @@ resources:
   - mysql/service.yaml
   - cloud-tasks-emulator/deployment.yaml
   - cloud-tasks-emulator/service.yaml
+  - pubsub-emulator/deployment.yaml
+  - pubsub-emulator/service.yaml
+  - gcs-emulator/deployment.yaml
+  - gcs-emulator/service.yaml
   - migration/job.yaml
 
 labels:

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { pool } from '@/lib/db'
+import { uploadReceipt } from '@/lib/storage'
 import type { ResultSetHeader, RowDataPacket } from 'mysql2'
 
 // Cloud Tasks はハンドラーが 2xx 以外を返すとタスクをリトライするため 404 と 500 を適切に返す
@@ -35,6 +36,14 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     if (result.affectedRows === 0) {
       return NextResponse.json({ error: 'Order not found' }, { status: 404 })
     }
+
+    const receiptContent = [
+      `領収書`,
+      `注文ID: ${orderId}`,
+      `ステータス: email_sent`,
+      `発行日時: ${new Date().toISOString()}`,
+    ].join('\n')
+    await uploadReceipt(orderId, receiptContent)
 
     return NextResponse.json({ ok: true })
   } catch (err) {

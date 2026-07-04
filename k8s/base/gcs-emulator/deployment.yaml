@@ -1,0 +1,35 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gcs-emulator
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: gcs
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: gcs
+    spec:
+      containers:
+        - name: gcs-emulator
+          image: fsouza/fake-gcs-server:latest
+          args:
+            - -scheme
+            - http
+            - -port
+            - "4443"
+            - -public-host
+            - gcs:4443
+          ports:
+            - containerPort: 4443
+          readinessProbe:
+            tcpSocket:
+              port: 4443
+          resources:
+            requests:
+              cpu: 50m
+              memory: 32Mi
+            limits:
+              memory: 128Mi

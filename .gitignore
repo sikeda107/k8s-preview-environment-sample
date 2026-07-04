@@ -22,3 +22,6 @@ node_modules/
 .idea/
 *.swp
 *.swo
+
+# Playwright CLI 検証用の生成物
+.playwright-cli/

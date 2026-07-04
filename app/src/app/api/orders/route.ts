@@ -1,7 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { pool } from '@/lib/db'
-import { enqueueSendEmailTask } from '@/lib/cloud-tasks'
-import type { ResultSetHeader } from 'mysql2'
+import { createOrder } from '@/lib/orders'
 
 export async function POST(req: NextRequest): Promise<NextResponse> {
   let body: unknown
@@ -20,14 +18,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   }
 
   try {
-    const [result] = await pool.execute<ResultSetHeader>(
-      'INSERT INTO orders (product_name, email, status) VALUES (?, ?, ?)',
-      [productName, email, 'pending'],
-    )
-    const orderId = result.insertId
-
-    await enqueueSendEmailTask({ orderId })
-
+    const orderId = await createOrder({ productName, email })
     return NextResponse.json({ orderId }, { status: 202 })
   } catch (err) {
     console.error('POST /api/orders error:', err)
