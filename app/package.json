@@ -11,19 +11,20 @@
     "db:migrate": "node db/migrate.mjs"
   },
   "dependencies": {
-    "@google-cloud/pubsub": "^5.3.1",
-    "@google-cloud/storage": "^7.21.0",
-    "@google-cloud/tasks": "^5.5.0",
-    "google-gax": "^4.6.1",
-    "mysql2": "^3.14.0",
-    "next": "^16.2.10",
-    "react": "^19.2.7",
-    "react-dom": "^19.2.7"
+    "@google-cloud/pubsub": "5.3.1",
+    "@google-cloud/storage": "7.21.0",
+    "@google-cloud/tasks": "6.2.3",
+    "google-gax": "5.0.7",
+    "mysql2": "3.22.5",
+    "next": "16.2.10",
+    "react": "19.2.7",
+    "react-dom": "19.2.7"
   },
   "devDependencies": {
-    "@types/node": "^22.15.30",
-    "@types/react": "^19.2.17",
-    "@types/react-dom": "^19.2.3",
-    "typescript": "^6.0.3"
+    "@types/node": "26.1.0",
+    "@types/react": "19.2.17",
+    "@types/react-dom": "19.2.3",
+    "@typescript/native-preview": "7.0.0-dev.20260703.1",
+    "typescript": "7.0.1-rc"
   }
 }
