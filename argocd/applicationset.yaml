@@ -12,13 +12,13 @@ spec:
         github:
           owner: sikeda107
           repo: k8s-preview-environment-sample
-          # private リポジトリのため Personal Access Token を Secret として用意する
-          # kubectl create secret generic github-token -n argocd --from-literal=token=<TOKEN>
-          tokenRef:
-            secretName: github-token
-            key: token
+          # public リポジトリのため token 不要 private の場合は tokenRef で Secret を指定する
+          # tokenRef:
+          #   secretName: github-token
+          #   key: token
         # Webhook 未設定でもポーリングで PR の変更に追従する
-        requeueAfterSeconds: 60
+        # 無認証は GitHub API のレート制限に触れるため間隔を広めに取る
+        requeueAfterSeconds: 120
   template:
     metadata:
       name: preview-pr-{{.number}}

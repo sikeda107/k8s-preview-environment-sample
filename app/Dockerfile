@@ -47,7 +47,7 @@ COPY --from=build --chown=nextjs:nodejs /app/public ./public
 COPY --from=build --chown=nextjs:nodejs /app/db ./db
 
 # runAsNonRoot の検証は数値 UID でしか行えないため数値で指定する
-USER 1001
+USER 999
 
 EXPOSE 3000
 CMD ["node", "server.js"]
