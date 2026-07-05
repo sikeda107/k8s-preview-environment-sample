@@ -1,0 +1,52 @@
+# .github/workflows/ 配下の変更を含む PR で workflow の品質を継続的に検証する
+name: workflow-lint
+on:
+  pull_request:
+    paths:
+      - .github/workflows/**
+
+permissions:
+  contents: read
+
+jobs:
+  actionlint:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: actionlint バイナリをダウンロードしてチェックサムを検証する
+        run: |
+          # バージョン固定でダウンロードしチェックサムを検証する
+          VERSION="1.7.12"
+          EXPECTED_SHA256="8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8"
+          curl -sSL "https://github.com/rhysd/actionlint/releases/download/v${VERSION}/actionlint_${VERSION}_linux_amd64.tar.gz" -o actionlint.tar.gz
+          echo "${EXPECTED_SHA256}  actionlint.tar.gz" | sha256sum -c -
+          tar -xzf actionlint.tar.gz actionlint
+          chmod +x actionlint
+        shell: bash
+
+      - name: actionlint を実行する
+        run: ./actionlint -color
+        shell: bash
+
+  pinact-check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: pinact バイナリをダウンロードして SHA ピン留め状態を検証する
+        run: |
+          # バージョン固定でダウンロードしチェックサムを検証する
+          VERSION="4.1.0"
+          EXPECTED_SHA256="8fcbf1b3e95551c82fd995535e3c1defa70e23299ce36eb3afd6c98778de6ca0"
+          curl -sSL "https://github.com/suzuki-shunsuke/pinact/releases/download/v${VERSION}/pinact_linux_amd64.tar.gz" -o pinact.tar.gz
+          echo "${EXPECTED_SHA256}  pinact.tar.gz" | sha256sum -c -
+          tar -xzf pinact.tar.gz pinact
+          chmod +x pinact
+        shell: bash
+
+      - name: 全 workflow が SHA ピン留め済みか検証する
+        run: ./pinact run --check
+        shell: bash

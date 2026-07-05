@@ -791,6 +791,10 @@ terraform -chdir=terraform output artifact_registry_url       # イメージ pus
 
 `enable_github_variables=true` を設定して `terraform apply` することで、Repository Variables の設定まで Terraform で自動化できます。
 
+### action の SHA ピン留めと継続検証
+
+このリポジトリの全 action は commit SHA でピン留めしている。タグは後から書き換え可能なため SHA 固定によりサプライチェーン攻撃を防ぐ。バージョン更新時は `pinact run` を実行すると全 workflow の SHA が最新タグの値に一括更新される。PR で `.github/workflows/` 配下を変更すると `workflow-lint` workflow が自動で actionlint と pinact のチェックを実行し SHA 未ピンや構文エラーがあれば fail する。
+
 ---
 
 ## 12. 本番利用時の注意点
