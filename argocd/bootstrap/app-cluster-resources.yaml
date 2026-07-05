@@ -1,0 +1,21 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: cluster-resources
+  namespace: argocd
+  # 誤削除時に cluster リソースごとカスケード削除されるのを避けるため finalizer は付けない
+spec:
+  project: platform
+  source:
+    repoURL: https://github.com/sikeda107/k8s-preview-environment-sample.git
+    targetRevision: main
+    path: k8s/gke/cluster
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: gateway-infra
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true

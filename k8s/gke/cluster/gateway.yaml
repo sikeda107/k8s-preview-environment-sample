@@ -3,18 +3,21 @@ kind: Gateway
 metadata:
   name: shared-gateway
   namespace: gateway-infra
+  annotations:
+    # Terraform で作成した Certificate Manager の certificate map を参照する
+    networking.gke.io/certmap: preview-cert-map
 spec:
   gatewayClassName: gke-l7-global-external-managed
+  addresses:
+    # Terraform で作成したグローバル静的 IP を参照する
+    - type: NamedAddress
+      value: preview-gateway-ip
   listeners:
     - name: https
       port: 443
       protocol: HTTPS
       hostname: "*.preview.example.com"
-      tls:
-        mode: Terminate
-        certificateRefs:
-          # ワイルドカード証明書を事前に作成して同 Namespace に配置すること
-          - name: preview-example-com-tls
+      # certmap 利用時は tls セクション不要 Secret 方式の場合は tls.certificateRefs に Secret を指定する
       allowedRoutes:
         namespaces:
           from: Selector

@@ -14,7 +14,7 @@ spec:
     spec:
       containers:
         - name: gcs-emulator
-          image: fsouza/fake-gcs-server:latest
+          image: fsouza/fake-gcs-server:1.54.0
           args:
             - -scheme
             - http
