@@ -14,7 +14,7 @@ spec:
     spec:
       containers:
         - name: cloud-tasks-emulator
-          image: ghcr.io/ken109/cloud-tasks-emulator:latest
+          image: ghcr.io/ken109/cloud-tasks-emulator:1.0.0
           args:
             - -host
             - 0.0.0.0

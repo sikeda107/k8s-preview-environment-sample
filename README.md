@@ -53,7 +53,7 @@ graph TD
             httproute["HTTPRoute\n(parentRef: local-gateway)"]
             nextjs["nextjs Deployment\n(image: nextjs:local)"]
             nextjs_svc["Service: nextjs\n:80 → :3000"]
-            mysql["mysql Deployment\n(image: mysql:8.0)"]
+            mysql["mysql Deployment\n(image: mysql:8.0.46)"]
             mysql_svc["Service: mysql\n:3306"]
             emulator["cloud-tasks-emulator\n(ghcr.io/ken109/cloud-tasks-emulator)"]
             emulator_svc["Service: cloud-tasks\n:8123"]
@@ -188,9 +188,9 @@ k8s-preview-environment-sample/
 │   │   ├── gateway.yaml            # Gateway: local-gateway
 │   │   └── httproute.yaml
 │   └── gke/
-│       ├── cluster/                # クラスタ共通リソース
+│       ├── cluster/                # クラスタ共通リソース (Argo CD が Git から自動同期)
 │       │   ├── namespace.yaml      # gateway-infra Namespace
-│       │   └── gateway.yaml        # Gateway: shared-gateway
+│       │   └── gateway.yaml        # Gateway: shared-gateway (certmap / NamedAddress)
 │       └── preview/                # PR ごと Namespace のオーバーレイ
 │           ├── kustomization.yaml  # ApplicationSet が namespace / image / patch を上書き
 │           ├── namespace.yaml      # pr-0 (label: preview=true)
@@ -198,7 +198,30 @@ k8s-preview-environment-sample/
 ├── argocd/
 │   ├── kustomization.yaml
 │   ├── appproject.yaml             # AppProject: preview (pr-* Namespace のみ許可)
-│   └── applicationset.yaml        # ApplicationSet: preview-environments
+│   ├── applicationset.yaml        # ApplicationSet: preview-environments
+│   ├── install/                   # Argo CD 本体インストール用 (v3.4.4 固定)
+│   │   ├── kustomization.yaml
+│   │   └── namespace.yaml
+│   ├── bootstrap/                 # app-of-apps 起動用 (1 回だけ kubectl apply)
+│   │   ├── kustomization.yaml
+│   │   ├── appproject-platform.yaml
+│   │   ├── app-argocd-config.yaml
+│   │   └── app-cluster-resources.yaml
+│   └── secrets/                   # private リポジトリ時のみ必要な Secret テンプレート
+│       ├── github-token.example.yaml
+│       └── repo-credentials.example.yaml
+├── terraform/                     # Google Cloud リソースの IaC
+│   ├── variables.tf               # 入力変数定義
+│   ├── outputs.tf                 # 出力値定義
+│   ├── artifact-registry.tf       # Artifact Registry リポジトリ
+│   ├── workload-identity.tf       # Workload Identity Pool / Provider / SA
+│   ├── network.tf                 # グローバル静的 IP (preview-gateway-ip)
+│   ├── certificate.tf             # Certificate Manager 証明書マップ (preview-cert-map)
+│   ├── dns.tf                     # Cloud DNS (enable_dns=true のときのみ)
+│   ├── production.tf              # 本番用リソース (enable_production_resources=true のときのみ)
+│   ├── github.tf                  # GitHub Repository Variables (enable_github_variables=true のときのみ)
+│   ├── terraform.tfvars.example   # 変数ファイルのサンプル
+│   └── README.md                  # terraform 詳細手順
 ├── hack/
 │   └── kind-config.yaml            # kind クラスタ設定
 ├── Makefile                        # ローカル開発用タスク
@@ -319,74 +342,96 @@ make kind-delete
 
 ### 前提
 
-- GKE クラスタで Gateway API が有効化されていること
+- GKE クラスタで Gateway API が有効化されていること（GKE クラスタ自体の作成はこのサンプルの対象外で既存クラスタを前提とする）
 - `kubectl` が対象クラスタを向いていること
-- Argo CD がクラスタにインストール済みであること
 
-### クラスタ共通リソースの適用
+### 1. terraform/ で Google Cloud リソースを作成する
 
-`gateway-infra` Namespace と共通 Gateway を適用します。
+`terraform/` ディレクトリで Terraform を実行し、必要な Google Cloud リソースを作成します。詳細な手順は [terraform/README.md](terraform/README.md) を参照してください。
+
+Terraform が作成する主なリソースは以下のとおりです。
+
+| リソース | 説明 |
+|---|---|
+| Artifact Registry | コンテナイメージの保存先 |
+| Workload Identity Federation | GitHub Actions からキーファイルなしで認証するための Pool / Provider |
+| CI 用サービスアカウント | GitHub Actions が Artifact Registry へ push するためのサービスアカウント |
+| グローバル静的 IP (`preview-gateway-ip`) | GKE Gateway が使用する固定外部 IP |
+| Certificate Manager 証明書マップ (`preview-cert-map`) | DNS 認証ワイルドカード証明書と証明書マップ |
+| Cloud DNS ゾーンとレコード | `enable_dns=true` のときのみ作成 |
+| Cloud Tasks / Pub/Sub / GCS バケット | `enable_production_resources=true` のときのみ作成 |
+| GitHub Repository Variables | `enable_github_variables=true` のときのみ作成 |
+
+### 2. Argo CD をインストールする
+
+Argo CD v3.4.4 を `argocd` Namespace にインストールします。
 
 ```bash
-kubectl apply -k k8s/gke/cluster
+kubectl apply -k argocd/install
 ```
 
-これにより `gateway-infra` Namespace に `shared-gateway` (GatewayClass: `gke-l7-global-external-managed`) が作成されます。
+### 3. private リポジトリの場合のみ Secret を作成する
 
-### Argo CD のリソース適用
+public リポジトリの場合はこの手順を省略できます。
 
-AppProject と ApplicationSet を適用します。
+private リポジトリの場合は `argocd/secrets/` 以下の example ファイルをコピーして実値を入れ、apply します（実ファイルは `.gitignore` により誤コミットされません）。
 
 ```bash
-kubectl apply -k argocd/
+# generator が PR 情報を取得するための Secret
+cp argocd/secrets/github-token.example.yaml argocd/secrets/github-token.yaml
+# REPLACE_WITH_GITHUB_PAT を実際の Personal Access Token に差し替える
+kubectl apply -f argocd/secrets/github-token.yaml
+
+# Argo CD 本体がリポジトリを取得するための認証情報
+cp argocd/secrets/repo-credentials.example.yaml argocd/secrets/repo-credentials.yaml
+# REPLACE_WITH_GITHUB_USER と REPLACE_WITH_GITHUB_PAT を差し替える
+kubectl apply -f argocd/secrets/repo-credentials.yaml
 ```
+
+PAT に必要な権限は classic なら `repo` スコープ、fine-grained なら Contents=Read / Pull requests=Read / Metadata=Read です。
+
+### 4. app-of-apps を起動して以降は Argo CD に自動同期させる
+
+```bash
+kubectl apply -k argocd/bootstrap
+```
+
+これにより `argocd-config` と `cluster-resources` の2つの Application が作成されます。以降は `argocd/` ディレクトリ内（AppProject / ApplicationSet）と `k8s/gke/cluster/`（Gateway / Namespace）を Argo CD が Git から自動同期するため、手動で `kubectl apply` する必要はなくなります。
 
 ### リポジトリ可視性 (public / private) による認証の違い
 
 ApplicationSet の `pullRequest` generator と Argo CD のリポジトリ取得に必要な認証は、リポジトリの可視性によって変わります。
 
-**public リポジトリの場合は認証不要です。** 無認証で PR を列挙でき、リポジトリ取得にも認証情報は要りません。`github-token` Secret も ApplicationSet の `tokenRef` も、リポジトリ登録も省略できます。ただし GitHub API の無認証レート制限 (60 req/h) に収まるよう、generator の `requeueAfterSeconds` を大きめ (例: 120) に設定してください。
+**public リポジトリの場合は認証不要です。** 無認証で PR を列挙でき、リポジトリ取得にも認証情報は要りません。`github-token` Secret も ApplicationSet の `tokenRef` も省略できます。ただし GitHub API の無認証レート制限 (60 req/h) に収まるよう、generator の `requeueAfterSeconds` を大きめ（例: 120）に設定してください。
 
-**private リポジトリの場合は Personal Access Token が必要です。** 必要な権限は classic なら `repo` スコープ、fine-grained なら Contents=Read / Pull requests=Read / Metadata=Read です。次の2つを用意します。
+**private リポジトリの場合は Personal Access Token が必要です。** 上記「手順 3」を参照してください。
 
-generator が PR 情報を取得するための Secret:
+### DNS と TLS 証明書の設定
 
-```bash
-kubectl create secret generic github-token \
-  -n argocd \
-  --from-literal=token=<GITHUB_PAT>
-```
+TLS 証明書は Terraform の Certificate Manager（DNS 認証ワイルドカード）で管理します。Gateway の `networking.gke.io/certmap: preview-cert-map` annotation が Terraform で作成した証明書マップを参照します。証明書用の Secret を手動作成する必要はありません。
 
-Argo CD 本体がリポジトリを取得するための認証情報:
+#### 静的 IP の参照
 
-```bash
-argocd repo add https://github.com/sikeda107/k8s-preview-environment-sample.git \
-  --username <GITHUB_USER> \
-  --password <GITHUB_PAT>
-```
+`k8s/gke/cluster/gateway.yaml` の `spec.addresses` に `NamedAddress` として `preview-gateway-ip` が設定されており、Terraform が作成したグローバル静的 IP を自動的に参照します。
 
-または Argo CD UI の Settings > Repositories から登録できます。
+#### DNS レコードの設定
 
-### DNS と TLS 証明書の準備
+**`enable_dns=true` の場合（Cloud DNS を Terraform で管理）**
 
-`kubectl get gateway shared-gateway -n gateway-infra` で Gateway に割り当てられた外部 IP を確認します。
+ワイルドカード A レコード (`*.preview.example.com`) と Certificate Manager の DNS 認証用 CNAME レコードが自動作成されます。追加の手動設定は不要です。
+
+**`enable_dns=false` の場合（外部 DNS プロバイダを使用）**
+
+Terraform の outputs を確認し、使用している DNS プロバイダに手動で登録します。
 
 ```bash
-kubectl get gateway shared-gateway -n gateway-infra -o jsonpath='{.status.addresses[0].value}'
+# Certificate Manager DNS 認証用 CNAME レコード
+terraform -chdir=terraform output dns_auth_cname_name   # CNAME レコードのホスト名
+terraform -chdir=terraform output dns_auth_cname_value  # CNAME レコードの値
+
+# *.preview.example.com 向けワイルドカード A レコードの IP
+terraform -chdir=terraform output static_ip_address
 ```
-
-DNS プロバイダで `*.preview.example.com` のワイルドカード A レコードを上記 IP に向けます。
-
-TLS 証明書は `preview-example-com-tls` という名前の Secret として `gateway-infra` Namespace に事前作成します。
-
-```bash
-kubectl create secret tls preview-example-com-tls \
-  -n gateway-infra \
-  --cert=path/to/tls.crt \
-  --key=path/to/tls.key
-```
-
-cert-manager を使う場合は Certificate リソースで同名の Secret を発行するように設定します。
 
 ---
 
@@ -433,13 +478,13 @@ Google Cloud Tasks・Google Cloud Pub/Sub・Google Cloud Storage はいずれも
 
 ### Cloud Tasks Emulator
 
-`ghcr.io/ken109/cloud-tasks-emulator:latest` を Deployment `cloud-tasks-emulator` / Service `cloud-tasks`（port 8123）でデプロイします。`CLOUD_TASKS_EMULATOR_HOST` 環境変数が設定されているときだけ Emulator に接続し、本番環境では同変数を設定しないため、コード変更なしに本番の Google Cloud Tasks に切り替わります。
+`ghcr.io/ken109/cloud-tasks-emulator:1.0.0` を Deployment `cloud-tasks-emulator` / Service `cloud-tasks`（port 8123）でデプロイします。`CLOUD_TASKS_EMULATOR_HOST` 環境変数が設定されているときだけ Emulator に接続し、本番環境では同変数を設定しないため、コード変更なしに本番の Google Cloud Tasks に切り替わります。
 
 | 項目 | Emulator | 本番 Google Cloud Tasks |
 |---|---|---|
 | 認証 | 不要 (TLS なし gRPC) | Workload Identity またはサービスアカウントキー |
 | ハンドラーへの OIDC 認証 | なし | `CLOUD_TASKS_SERVICE_ACCOUNT_EMAIL` で設定 |
-| キュー作成 | アプリ起動時に自動作成 | 事前に `gcloud tasks queues create` |
+| キュー作成 | アプリ起動時に自動作成 | `enable_production_resources=true` で Terraform が作成 |
 | レート制御 | なし | maxDispatchesPerSecond / maxConcurrentDispatches |
 | タスク到達性 | 同一クラスタ内の Service 名で到達 | 外部 URL が必要 |
 | 永続性 | Pod 再起動で消える | マネージドで永続 |
@@ -460,25 +505,25 @@ function createClient(): CloudTasksClient {
 
 ### Pub/Sub Emulator
 
-`thekevjames/gcloud-pubsub-emulator:latest` を Deployment `pubsub-emulator` / Service `pubsub`（port 8085 → コンテナ 8681）でデプロイします。`PUBSUB_EMULATOR_HOST` 環境変数を `@google-cloud/pubsub` がネイティブに解釈するため、アプリ側で特別な切り替えコードは不要です。エミュレーター利用時はアプリ起動時に topic `order-events` と push サブスクリプション `order-events-push` を自動作成します。
+`thekevjames/gcloud-pubsub-emulator:575.0.0` を Deployment `pubsub-emulator` / Service `pubsub`（port 8085 → コンテナ 8681）でデプロイします。`PUBSUB_EMULATOR_HOST` 環境変数を `@google-cloud/pubsub` がネイティブに解釈するため、アプリ側で特別な切り替えコードは不要です。エミュレーター利用時はアプリ起動時に topic `order-events` と push サブスクリプション `order-events-push` を自動作成します。
 
 | 項目 | Emulator | 本番 Google Cloud Pub/Sub |
 |---|---|---|
 | 認証 | 不要 | Workload Identity またはサービスアカウントキー |
 | push サブスクリプションの OIDC 認証 | なし | OIDC トークン検証を推奨 |
-| topic / サブスクリプション作成 | アプリ起動時に自動作成 | 事前にコンソールまたは gcloud で作成 |
+| topic / サブスクリプション作成 | アプリ起動時に自動作成 | `enable_production_resources=true` で Terraform が作成 |
 | 永続性 | Pod 再起動で消える | マネージドで永続 |
 
 `app/src/lib/pubsub.ts` が `PUBSUB_EMULATOR_HOST` の有無を確認してエミュレーター時の自動作成を行います。
 
 ### Cloud Storage Emulator
 
-`fsouza/fake-gcs-server:latest` を Deployment `gcs-emulator` / Service `gcs`（port 4443）でデプロイします。`STORAGE_EMULATOR_HOST` 環境変数が設定されているときだけエミュレーターに接続します。エミュレーター利用時はアプリ起動時に bucket `order-receipts` を自動作成します。
+`fsouza/fake-gcs-server:1.54.0` を Deployment `gcs-emulator` / Service `gcs`（port 4443）でデプロイします。`STORAGE_EMULATOR_HOST` 環境変数が設定されているときだけエミュレーターに接続します。エミュレーター利用時はアプリ起動時に bucket `order-receipts` を自動作成します。
 
 | 項目 | Emulator | 本番 Google Cloud Storage |
 |---|---|---|
 | 認証 | 不要 | Workload Identity またはサービスアカウントキー |
-| bucket 作成 | アプリ起動時に自動作成 | 事前にコンソールまたは gcloud で作成 |
+| bucket 作成 | アプリ起動時に自動作成 | `enable_production_resources=true` で Terraform が作成 |
 | TLS | なし (HTTP) | HTTPS |
 | 永続性 | Pod 再起動で消える | マネージドで永続 |
 
@@ -725,70 +770,49 @@ db-migrate Job が失敗すると Sync 全体が失敗扱いになります。ne
 
 Secrets は不要です。すべて Repository Variables で設定します。
 
-| 変数名 | 例 | 説明 |
+| 変数名 | 対応する Terraform output | 説明 |
 |---|---|---|
-| `GOOGLE_CLOUD_PROJECT_ID` | `my-project-12345` | Google Cloud プロジェクト ID |
-| `ARTIFACT_REGISTRY_REPOSITORY` | `preview` | Artifact Registry リポジトリ名 |
-| `GOOGLE_CLOUD_SERVICE_ACCOUNT` | `github-actions@my-project-12345.iam.gserviceaccount.com` | CI 用サービスアカウント |
-| `WORKLOAD_IDENTITY_PROVIDER` | `projects/123/locations/global/workloadIdentityPools/github/providers/github` | Workload Identity Provider のリソース名 |
+| `GOOGLE_CLOUD_PROJECT_ID` | `terraform.tfvars` の `project_id` | Google Cloud プロジェクト ID |
+| `ARTIFACT_REGISTRY_REPOSITORY` | `terraform.tfvars` の `artifact_registry_repository_id` | Artifact Registry リポジトリ名 |
+| `GOOGLE_CLOUD_SERVICE_ACCOUNT` | `service_account_email` | CI 用サービスアカウントのメールアドレス |
+| `WORKLOAD_IDENTITY_PROVIDER` | `workload_identity_provider` | Workload Identity Provider のリソース名 |
 
 `WORKLOAD_IDENTITY_PROVIDER` が未設定のリポジトリでは `build-and-push` ジョブが自動スキップされます。Fork したリポジトリや Variables を設定していない環境で安全に動作します。
 
-### Workload Identity Federation の準備
+### Workload Identity Federation と Repository Variables の準備
 
-GitHub Actions から Google Cloud へキーファイルなしで認証するための設定手順です。
-
-```bash
-# 1. Workload Identity Pool の作成
-gcloud iam workload-identity-pools create github \
-  --project="${PROJECT_ID}" \
-  --location="global" \
-  --display-name="GitHub Actions"
-
-# 2. Provider の作成 (GitHub の OIDC を使う)
-gcloud iam workload-identity-pools providers create-oidc github \
-  --project="${PROJECT_ID}" \
-  --location="global" \
-  --workload-identity-pool="github" \
-  --display-name="GitHub" \
-  --attribute-mapping="google.subject=assertion.sub,attribute.repository=assertion.repository" \
-  --issuer-uri="https://token.actions.githubusercontent.com"
-
-# 3. CI 用サービスアカウントの作成
-gcloud iam service-accounts create github-actions \
-  --project="${PROJECT_ID}" \
-  --display-name="GitHub Actions"
-
-# 4. Artifact Registry への書き込み権限を付与
-gcloud projects add-iam-policy-binding "${PROJECT_ID}" \
-  --member="serviceAccount:github-actions@${PROJECT_ID}.iam.gserviceaccount.com" \
-  --role="roles/artifactregistry.writer"
-
-# 5. GitHub リポジトリからの Workload Identity 利用を許可
-gcloud iam service-accounts add-iam-policy-binding \
-  "github-actions@${PROJECT_ID}.iam.gserviceaccount.com" \
-  --project="${PROJECT_ID}" \
-  --role="roles/iam.workloadIdentityUser" \
-  --member="principalSet://iam.googleapis.com/projects/${PROJECT_NUMBER}/locations/global/workloadIdentityPools/github/attribute.repository/${GITHUB_REPO}"
-```
-
-`WORKLOAD_IDENTITY_PROVIDER` に設定する値は以下のコマンドで取得できます。
+Workload Identity Pool / Provider / サービスアカウントの作成は `terraform/workload-identity.tf` で管理します。`terraform apply` 後に outputs を確認して Repository Variables に設定してください。
 
 ```bash
-gcloud iam workload-identity-pools providers describe github \
-  --project="${PROJECT_ID}" \
-  --location="global" \
-  --workload-identity-pool="github" \
-  --format="value(name)"
+terraform -chdir=terraform output workload_identity_provider  # WORKLOAD_IDENTITY_PROVIDER
+terraform -chdir=terraform output service_account_email       # GOOGLE_CLOUD_SERVICE_ACCOUNT
+terraform -chdir=terraform output artifact_registry_url       # イメージ push 先 URL の確認用
 ```
+
+`enable_github_variables=true` を設定して `terraform apply` することで、Repository Variables の設定まで Terraform で自動化できます。
 
 ---
 
 ## 12. 本番利用時の注意点
 
+### スコープ外の明記
+
+GKE クラスタ自体の作成はこのサンプルの対象外です。既存の GKE クラスタ（Gateway API 有効）を前提とします。
+
 ### プレースホルダーの差し替え一覧
 
-以下のプレースホルダーは利用者が実際の値に差し替える必要があります。
+多くの設定値は `terraform/terraform.tfvars` に集約されています。Terraform apply 後に k8s / argocd 側に残るプレースホルダーを手動で差し替えてください。
+
+**terraform/terraform.tfvars で設定するもの**
+
+| 変数名 | 説明 |
+|---|---|
+| `project_id` | Google Cloud プロジェクト ID |
+| `preview_domain` | プレビュー環境のベースドメイン（例: `preview.example.com`） |
+| `github_repository` | GitHub リポジトリ名（`owner/repo` 形式） |
+| `artifact_registry_repository_id` | Artifact Registry リポジトリ ID |
+
+**k8s / argocd 側に残るプレースホルダー**
 
 | プレースホルダー | 対象ファイル | 説明 |
 |---|---|---|
@@ -799,7 +823,6 @@ gcloud iam workload-identity-pools providers describe github \
 | `IMAGE_TAG` | `k8s/gke/preview/kustomization.yaml` | ApplicationSet の images が `pr-<番号>-<SHA>` で上書きする既定値 |
 | `preview.example.com` | `k8s/gke/cluster/gateway.yaml` | 実際のドメイン |
 | `preview.example.com` | `argocd/applicationset.yaml` | 同上 |
-| `preview-example-com-tls` | `k8s/gke/cluster/gateway.yaml` | TLS 証明書 Secret 名 |
 | `sikeda107` | `argocd/applicationset.yaml` | GitHub Organization / ユーザー名 |
 | `k8s-preview-environment-sample` | `argocd/applicationset.yaml` | GitHub リポジトリ名 |
 

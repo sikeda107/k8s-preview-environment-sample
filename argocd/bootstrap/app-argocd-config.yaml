@@ -1,0 +1,20 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: argocd-config
+  namespace: argocd
+  # 誤削除時に Argo CD 設定ごとカスケード削除されるのを避けるため finalizer は付けない
+spec:
+  # AppProject preview と ApplicationSet を Git 管理下で自己管理する
+  project: platform
+  source:
+    repoURL: https://github.com/sikeda107/k8s-preview-environment-sample.git
+    targetRevision: main
+    path: argocd
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: argocd
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true

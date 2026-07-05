@@ -14,7 +14,7 @@ spec:
     spec:
       containers:
         - name: pubsub-emulator
-          image: thekevjames/gcloud-pubsub-emulator:latest
+          image: thekevjames/gcloud-pubsub-emulator:575.0.0
           ports:
             - containerPort: 8681
           readinessProbe:

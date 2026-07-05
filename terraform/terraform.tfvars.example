@@ -1,0 +1,33 @@
+# このファイルをコピーして terraform.tfvars として使用する
+# cp terraform.tfvars.example terraform.tfvars
+# 各値を実際の環境に合わせて差し替えること
+
+# Google Cloud プロジェクト ID (必須) 例: my-project-12345
+project_id = "YOUR_PROJECT_ID"
+
+# リソースを作成するリージョン
+region = "asia-northeast1"
+
+# プレビュー環境のベースドメイン 実際のドメインに差し替えること 例: preview.mycompany.com
+preview_domain = "preview.example.com"
+
+# GitHub リポジトリ名 オーナーを含む形式で記述する 例: myorg/myrepo
+github_repository = "sikeda107/k8s-preview-environment-sample"
+
+# Artifact Registry リポジトリ ID workflow の vars.ARTIFACT_REGISTRY_REPOSITORY と一致させること
+artifact_registry_repository_id = "preview"
+
+# Cloud DNS ゾーンを Terraform で管理する場合は true にする
+# false の場合は apply 後に出力される CNAME を手動で DNS プロバイダに設定する
+enable_dns = false
+
+# Cloud Tasks Pub/Sub GCS などの本番用リソースを作成する場合は true にする
+enable_production_resources = false
+
+# GitHub Repository Variables を Terraform で管理する場合は true にする
+# GITHUB_TOKEN 環境変数または provider の token 引数で GitHub 認証が必要
+enable_github_variables = false
+
+# Pub/Sub push サブスクリプションのエンドポイント URL
+# enable_production_resources が true のときに設定する 例: https://pr-0.preview.mycompany.com/api/pubsub/order-created
+pubsub_push_endpoint = "https://YOUR_DOMAIN/api/pubsub/order-created"
